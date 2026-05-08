@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════
-   NexSearch v3.0 — app.js
+   NexSearch v3.1 — app.js
    ═══════════════════════════════════════════ */
 
 'use strict';
@@ -53,32 +53,40 @@ let currentPage = 'home';
 
 function navigate(url) {
   if (!url) return;
-  if (!/^https?:\/\//.test(url)) url = 'https://' + url;
 
+  // http/https yoksa ekle
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
+  // URL geçerli mi?
+  try { new URL(url); } catch {
+    showToast('Geçersiz URL!', true);
+    return;
+  }
+
+  // Geçmişe ekle
   history = history.filter(h => h.url !== url);
   history.unshift({ url, ts: Date.now() });
   history = history.slice(0, 50);
   store.set('nx_hist', history);
-
   renderHistory();
   renderStats();
 
-  fetch("https://nex-search-backend.onrender.com/proxy", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ url: url })
-  })
-  .then(res => res.text())
-  .then(data => {
-    document.open();
-    document.write(data);
-    document.close();
-  });
+  // Proxy öneki al
+  const proxy = (settings.proxyUrl || DEFAULT_PROXY).trim();
+  const proxyBase = proxy.endsWith('=') || proxy.endsWith('/') ? proxy : proxy + '=';
+
+  // Nihai URL: proxy + encode edilmiş hedef
+  const finalUrl = proxyBase + encodeURIComponent(url);
 
   const hostname = (() => { try { return new URL(url).hostname; } catch { return url; } })();
-  showToast('Bağlanıyor → ' + hostname);
+  showToast('Açılıyor → ' + hostname);
+
+  if (settings.newTab) {
+    const win = window.open(finalUrl, '_blank');
+    if (!win) window.location.href = finalUrl; // pop-up engellendiyse
+  } else {
+    window.location.href = finalUrl;
+  }
 }
 
 /* ════════════════════════════
@@ -87,33 +95,23 @@ function navigate(url) {
 
 function showPage(page) {
   currentPage = page;
-
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.snav-item').forEach(a => a.classList.remove('active'));
-
   const el = document.getElementById('page-' + page);
   if (el) el.classList.add('active');
-
   const link = document.querySelector(`.snav-item[data-page="${page}"]`);
   if (link) link.classList.add('active');
-
-  // Refresh settings page counts if opened
   if (page === 'settings') refreshSettingsPage();
-  if (page === 'about') refreshAboutPage();
-
-  // Close sidebar on mobile
+  if (page === 'about')    refreshAboutPage();
   closeSidebar();
 }
 
 document.querySelectorAll('.snav-item').forEach(link => {
-  link.addEventListener('click', e => {
-    e.preventDefault();
-    showPage(link.dataset.page);
-  });
+  link.addEventListener('click', e => { e.preventDefault(); showPage(link.dataset.page); });
 });
 
 /* ════════════════════════════
-   SIDEBAR (MOBILE)
+   SIDEBAR
    ════════════════════════════ */
 
 const hamburger = document.getElementById('hamburger');
@@ -121,23 +119,12 @@ const sidebar   = document.getElementById('sidebar');
 const overlay   = document.getElementById('sidebar-overlay');
 
 hamburger.addEventListener('click', () => {
-  const isOpen = sidebar.classList.contains('open');
-  if (isOpen) closeSidebar();
-  else openSidebar();
+  sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
 });
-
 overlay.addEventListener('click', closeSidebar);
 
-function openSidebar() {
-  sidebar.classList.add('open');
-  overlay.classList.add('active');
-  hamburger.classList.add('open');
-}
-function closeSidebar() {
-  sidebar.classList.remove('open');
-  overlay.classList.remove('active');
-  hamburger.classList.remove('open');
-}
+function openSidebar()  { sidebar.classList.add('open'); overlay.classList.add('active'); hamburger.classList.add('open'); }
+function closeSidebar() { sidebar.classList.remove('open'); overlay.classList.remove('active'); hamburger.classList.remove('open'); }
 
 /* ════════════════════════════
    RENDER FAVS
@@ -145,30 +132,22 @@ function closeSidebar() {
 
 function renderFavs() {
   const grid = document.getElementById('fav-grid');
-
   const cards = favs.map((f, i) => {
     const host = (() => { try { return new URL(f.url).hostname; } catch { return f.url; } })();
     const safe = f.url.replace(/'/g, "\\'");
     return `<div class="fav-card" role="button" tabindex="0"
-      onclick="navigate('${safe}')"
-      onkeydown="if(event.key==='Enter')navigate('${safe}')"
-      style="animation-delay:${i * 0.04}s"
-      title="${escHtml(f.name)}">
+      onclick="navigate('${safe}')" onkeydown="if(event.key==='Enter')navigate('${safe}')"
+      style="animation-delay:${i * 0.04}s" title="${escHtml(f.name)}">
       <div class="fav-icon">${f.icon}</div>
       <div class="fav-name">${escHtml(f.name)}</div>
       <div class="fav-host">${escHtml(host)}</div>
     </div>`;
   }).join('');
-
   const addBtn = `<div class="fav-card fav-add" role="button" tabindex="0"
-    onclick="openModal()"
-    onkeydown="if(event.key==='Enter')openModal()"
-    style="animation-delay:${favs.length * 0.04}s"
-    title="Favori ekle">
-    <div class="add-plus">+</div>
-    <div class="fav-name">Ekle</div>
+    onclick="openModal()" onkeydown="if(event.key==='Enter')openModal()"
+    style="animation-delay:${favs.length * 0.04}s" title="Favori ekle">
+    <div class="add-plus">+</div><div class="fav-name">Ekle</div>
   </div>`;
-
   grid.innerHTML = cards + addBtn;
   renderStats();
 }
@@ -180,28 +159,18 @@ function renderFavs() {
 function renderHistory() {
   const list  = document.getElementById('history-list');
   const count = document.getElementById('hist-count');
-
   count.textContent = history.length ? `${history.length} ziyaret` : '0 ziyaret';
-
   if (!history.length) {
-    list.innerHTML = `<li class="empty-state">
-      <div class="empty-icon">◌</div>
-      <p class="empty-text">Henüz ziyaret geçmişi yok</p>
-    </li>`;
+    list.innerHTML = `<li class="empty-state"><div class="empty-icon">◌</div><p class="empty-text">Henüz ziyaret geçmişi yok</p></li>`;
     return;
   }
-
   list.innerHTML = history.map((item, i) => {
-    const host     = (() => { try { return new URL(item.url).hostname; } catch { return item.url; } })();
-    const time     = relativeTime(item.ts);
-    const favicon  = `https://www.google.com/s2/favicons?domain=${host}&sz=32`;
-
+    const host    = (() => { try { return new URL(item.url).hostname; } catch { return item.url; } })();
+    const time    = relativeTime(item.ts);
+    const favicon = `https://www.google.com/s2/favicons?domain=${host}&sz=32`;
     return `<li class="history-item" style="animation-delay:${i * 0.025}s">
-      <div class="h-favicon">
-        <img src="${favicon}" alt="" loading="lazy" onerror="this.style.display='none'">
-      </div>
-      <a class="h-link" href="#" onclick="navigate('${item.url.replace(/'/g, "\\'")}'); return false;"
-         title="${escHtml(item.url)}">${escHtml(item.url)}</a>
+      <div class="h-favicon"><img src="${favicon}" alt="" loading="lazy" onerror="this.style.display='none'"></div>
+      <a class="h-link" href="#" onclick="navigate('${item.url.replace(/'/g, "\\'")}'); return false;" title="${escHtml(item.url)}">${escHtml(item.url)}</a>
       <time class="h-time">${time}</time>
       <button class="h-del" onclick="deleteHistoryItem(${i})" aria-label="Sil">✕</button>
     </li>`;
@@ -213,9 +182,9 @@ function renderHistory() {
    ════════════════════════════ */
 
 function renderStats() {
-  document.getElementById('stat-total').textContent      = history.length;
-  document.getElementById('fav-tab-count').textContent   = favs.length;
-  document.getElementById('hist-tab-count').textContent  = history.length;
+  document.getElementById('stat-total').textContent     = history.length;
+  document.getElementById('fav-tab-count').textContent  = favs.length;
+  document.getElementById('hist-tab-count').textContent = history.length;
 }
 
 function refreshAboutPage() {
@@ -230,15 +199,11 @@ function refreshSettingsPage() {
   const sh = document.getElementById('settings-hist-count');
   if (sf) sf.textContent = favs.length;
   if (sh) sh.textContent = history.length;
-
   const proxyInput = document.getElementById('proxy-url-input');
-  if (proxyInput) proxyInput.value = settings.proxyUrl;
-
+  if (proxyInput) proxyInput.value = settings.proxyUrl || DEFAULT_PROXY;
   document.getElementById('toggle-newtab').checked  = settings.newTab;
   document.getElementById('toggle-anim').checked    = settings.animation;
   document.getElementById('toggle-compact').checked = settings.compact;
-
-  // Sync theme buttons
   document.querySelectorAll('.theme-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.theme === (settings.theme || 'dark'));
   });
@@ -269,15 +234,11 @@ function clearHistory() {
 document.getElementById('ql-tabs').addEventListener('click', e => {
   const btn = e.target.closest('.ptab');
   if (!btn) return;
-
   document.querySelectorAll('.ptab').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-
   btn.classList.add('active');
   document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-
-  const clearBtn = document.getElementById('clear-all');
-  clearBtn.style.display = btn.dataset.tab === 'history' ? 'flex' : 'none';
+  document.getElementById('clear-all').style.display = btn.dataset.tab === 'history' ? 'flex' : 'none';
 });
 
 /* ════════════════════════════
@@ -290,25 +251,20 @@ const clearBtn = document.getElementById('clear-input');
 urlInput.addEventListener('input', () => {
   clearBtn.classList.toggle('visible', urlInput.value.length > 0);
 });
-
 clearBtn.addEventListener('click', () => {
   urlInput.value = '';
   clearBtn.classList.remove('visible');
   urlInput.focus();
 });
 
-document.getElementById('go-btn').addEventListener('click', () => navigate(urlInput.value.trim()));
+document.getElementById('go-btn').addEventListener('click',   () => navigate(urlInput.value.trim()));
 document.getElementById('go-btn-2').addEventListener('click', () => navigate(urlInput.value.trim()));
-
-urlInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') navigate(urlInput.value.trim());
-});
+urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') navigate(urlInput.value.trim()); });
 
 document.getElementById('lucky-btn').addEventListener('click', () => {
   if (favs.length) navigate(favs[Math.floor(Math.random() * favs.length)].url);
   else showToast('Önce favori ekle!');
 });
-
 document.getElementById('clear-all').addEventListener('click', clearHistory);
 
 /* ════════════════════════════
@@ -317,52 +273,34 @@ document.getElementById('clear-all').addEventListener('click', clearHistory);
 
 document.getElementById('save-proxy').addEventListener('click', () => {
   const val = document.getElementById('proxy-url-input').value.trim();
-  if (!val) { showToast('Proxy URL boş olamaz'); return; }
+  if (!val) { showToast('Proxy URL boş olamaz', true); return; }
   settings.proxyUrl = val;
   store.set('nx_settings', settings);
   showToast('Proxy kaydedildi');
 });
-
 document.getElementById('toggle-newtab').addEventListener('change', e => {
-  settings.newTab = e.target.checked;
-  store.set('nx_settings', settings);
+  settings.newTab = e.target.checked; store.set('nx_settings', settings);
   showToast(settings.newTab ? 'Yeni sekme açık' : 'Aynı sekmede açılır');
 });
-
 document.getElementById('toggle-anim').addEventListener('change', e => {
-  settings.animation = e.target.checked;
-  store.set('nx_settings', settings);
+  settings.animation = e.target.checked; store.set('nx_settings', settings);
 });
-
 document.getElementById('toggle-compact').addEventListener('change', e => {
-  settings.compact = e.target.checked;
-  store.set('nx_settings', settings);
+  settings.compact = e.target.checked; store.set('nx_settings', settings);
   document.body.classList.toggle('compact', settings.compact);
 });
-
-document.getElementById('clear-history-btn').addEventListener('click', () => {
-  clearHistory();
-  refreshSettingsPage();
-});
-
+document.getElementById('clear-history-btn').addEventListener('click', () => { clearHistory(); refreshSettingsPage(); });
 document.getElementById('reset-favs-btn').addEventListener('click', () => {
-  favs = [...DEFAULT_FAVS];
-  store.set('nx_favs', favs);
-  renderFavs(); renderStats();
-  refreshSettingsPage();
+  favs = [...DEFAULT_FAVS]; store.set('nx_favs', favs);
+  renderFavs(); renderStats(); refreshSettingsPage();
   showToast('Favoriler sıfırlandı');
 });
-
 document.getElementById('nuke-btn').addEventListener('click', () => {
   if (!confirm('Tüm veriler silinecek. Emin misin?')) return;
-  store.remove('nx_favs');
-  store.remove('nx_hist');
-  store.remove('nx_settings');
-  favs = [...DEFAULT_FAVS];
-  history = [];
-  settings = { proxyUrl: DEFAULT_PROXY, newTab: true, animation: true, compact: false };
-  renderFavs(); renderHistory(); renderStats();
-  refreshSettingsPage();
+  store.remove('nx_favs'); store.remove('nx_hist'); store.remove('nx_settings');
+  favs = [...DEFAULT_FAVS]; history = [];
+  settings = { proxyUrl: DEFAULT_PROXY, newTab: true, animation: true, compact: false, theme: 'dark' };
+  renderFavs(); renderHistory(); renderStats(); refreshSettingsPage();
   showToast('Tüm veriler silindi');
 });
 
@@ -378,36 +316,24 @@ function openModal() {
   document.getElementById('modal-overlay').classList.add('open');
   setTimeout(() => document.getElementById('fav-name-input').focus(), 60);
 }
-
-function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('open');
-}
+function closeModal() { document.getElementById('modal-overlay').classList.remove('open'); }
 
 function renderEmojiPicker() {
   document.getElementById('emoji-row').innerHTML = EMOJI_OPTIONS.map(e => `
-    <div class="emoji-opt${e === selEmoji ? ' selected' : ''}"
-         role="radio" tabindex="0"
-         onclick="selectEmoji('${e}')"
-         onkeydown="if(event.key==='Enter')selectEmoji('${e}')">${e}</div>
+    <div class="emoji-opt${e === selEmoji ? ' selected' : ''}" role="radio" tabindex="0"
+         onclick="selectEmoji('${e}')" onkeydown="if(event.key==='Enter')selectEmoji('${e}')">${e}</div>
   `).join('');
 }
-
-function selectEmoji(emoji) {
-  selEmoji = emoji;
-  renderEmojiPicker();
-}
+function selectEmoji(emoji) { selEmoji = emoji; renderEmojiPicker(); }
 
 document.getElementById('modal-close-btn').addEventListener('click', closeModal);
 document.getElementById('modal-cancel').addEventListener('click', closeModal);
-document.getElementById('modal-overlay').addEventListener('click', e => {
-  if (e.target.id === 'modal-overlay') closeModal();
-});
-
+document.getElementById('modal-overlay').addEventListener('click', e => { if (e.target.id === 'modal-overlay') closeModal(); });
 document.getElementById('modal-save').addEventListener('click', () => {
   const name = document.getElementById('fav-name-input').value.trim();
   let   url  = document.getElementById('fav-url-input').value.trim();
-  if (!name || !url) { showToast('Ad ve URL zorunlu'); return; }
-  if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+  if (!name || !url) { showToast('Ad ve URL zorunlu', true); return; }
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
   favs.push({ name, url, icon: selEmoji });
   store.set('nx_favs', favs);
   renderFavs(); closeModal();
@@ -424,7 +350,6 @@ function applyTheme(theme) {
     btn.classList.toggle('active', btn.dataset.theme === theme);
   });
 }
-
 document.getElementById('theme-switcher').addEventListener('click', e => {
   const btn = e.target.closest('.theme-btn');
   if (!btn) return;
@@ -439,8 +364,7 @@ document.getElementById('theme-switcher').addEventListener('click', e => {
 
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-    e.preventDefault();
-    showPage('home');
+    e.preventDefault(); showPage('home');
     setTimeout(() => urlInput.focus(), 50);
   }
   if (e.key === 'Escape') closeModal();
@@ -450,12 +374,20 @@ document.addEventListener('keydown', e => {
    TOAST
    ════════════════════════════ */
 
-function showToast(msg) {
-  const el = document.getElementById('toast');
+function showToast(msg, isError = false) {
+  const el   = document.getElementById('toast');
+  const icon = document.querySelector('#toast svg');
   document.getElementById('toast-msg').textContent = msg;
+  el.classList.remove('show', 'toast-error');
+  if (isError) el.classList.add('toast-error');
+  if (icon) {
+    icon.innerHTML = isError
+      ? '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
+      : '<polyline points="20 6 9 17 4 12"/>';
+  }
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
 }
 
 /* ════════════════════════════
@@ -474,9 +406,7 @@ function relativeTime(ts) {
 }
 
 function escHtml(s) {
-  return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 /* ════════════════════════════
@@ -487,9 +417,5 @@ renderFavs();
 renderHistory();
 renderStats();
 refreshSettingsPage();
-
-// Apply compact mode if saved
 if (settings.compact) document.body.classList.add('compact');
-
-// Apply theme if saved
 applyTheme(settings.theme || 'dark');
